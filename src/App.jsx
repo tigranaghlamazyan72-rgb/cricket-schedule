@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { initializeApp } from "firebase/app";
-import { getFirestore, doc, setDoc, onSnapshot, collection } from "firebase/firestore";
+import { getFirestore, doc, setDoc, deleteDoc, onSnapshot, collection } from "firebase/firestore";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAFZpIrw7_d-sIZzNJRcvuomHOGFZmTfGg",
@@ -54,18 +54,26 @@ function getWeek(offsetWeeks = 0) {
   });
 }
 
-function weekLabel(days) { return `${days[0].date} – ${days[6].date}`; }
+function weekLabel(days) {
+  return `${days[0].date} – ${days[6].date}`;
+}
+
 function getWeekKey(days) { return days[0].key; }
 
+// Count how many people signed up for a specific shift on a day in a week
 function countForShift(requests, weekKey, dayKey, shiftId) {
   return TEAM.filter(m => ((requests[m.name] || {})[weekKey] || {})[dayKey] === shiftId).length;
 }
 
 function buildSchedule(requests, days, weekKey) {
   const s = {};
-  days.forEach(d => { s[d.key] = {}; SHIFTS.forEach(sh => { s[d.key][sh.id] = []; }); });
+  days.forEach(d => {
+    s[d.key] = {};
+    SHIFTS.forEach(sh => { s[d.key][sh.id] = []; });
+  });
   Object.entries(requests).forEach(([name, weeks]) => {
-    Object.entries((weeks[weekKey] || {})).forEach(([dayKey, shiftId]) => {
+    const weekData = (weeks[weekKey] || {});
+    Object.entries(weekData).forEach(([dayKey, shiftId]) => {
       if (shiftId && s[dayKey]?.[shiftId]) s[dayKey][shiftId].push(name);
     });
   });
@@ -73,7 +81,9 @@ function buildSchedule(requests, days, weekKey) {
 }
 
 function getUncoveredShifts(requests, dayKey, weekKey) {
-  return SHIFTS.filter(shift => !TEAM.some(m => ((requests[m.name] || {})[weekKey] || {})[dayKey] === shift.id)).map(s => s.id);
+  return SHIFTS.filter(shift =>
+    !TEAM.some(m => ((requests[m.name] || {})[weekKey] || {})[dayKey] === shift.id)
+  ).map(s => s.id);
 }
 
 export default function App() {
@@ -87,7 +97,43 @@ export default function App() {
   const [form, setForm]         = useState({ name:"", password:"", error:"" });
   const [showPwd, setShowPwd]   = useState(false);
   const [editModal, setEditModal] = useState(null);
+  const [announcements, setAnnouncements] = useState([]);
+  const [newAnnMsg, setNewAnnMsg] = useState("");
   const pwdRef = useRef();
+
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "announcements"), (snapshot) => {
+      const docs = [];
+      snapshot.forEach(d => docs.push({ id: d.id, ...d.data() }));
+      setAnnouncements(docs.sort((a, b) => b.createdAt - a.createdAt));
+    });
+    return () => unsub();
+  }, []);
+
+  async function postAnnouncement() {
+    if (!newAnnMsg.trim()) return;
+    try {
+      const id = Date.now().toString();
+      await setDoc(doc(db, "announcements", id), {
+        text: newAnnMsg,
+        author: user.name,
+        createdAt: Date.now()
+      });
+      setNewAnnMsg("");
+    } catch(e) { alert("Ошибка при публикации"); }
+  }
+
+  async function deleteAnnouncement(annId) {
+    await deleteDoc(doc(db, "announcements", annId));
+  }
+
+  async function managerEditShift(memberName, weekKey, dayKey, newShiftId) {
+    const existing = requests[memberName] || {};
+    const weekData = { ...(existing[weekKey] || {}) };
+    if (newShiftId === null) { delete weekData[dayKey]; } else { weekData[dayKey] = newShiftId; }
+    await setDoc(doc(db, "schedules", memberName), { ...existing, [weekKey]: weekData });
+    setEditModal(null);
+  }
 
   const curDays  = getWeek(0);
   const nextDays = getWeek(1);
@@ -112,11 +158,14 @@ export default function App() {
       setUser({ name:"Менеджер", isAdmin:true }); setPage("schedule");
       setForm({ name:"", password:"", error:"" }); return;
     }
-    const m = TEAM.find(x => (x.login||x.name).toLowerCase() === n.toLowerCase() && x.password === p);
+    const m = TEAM.find(x => (x.login || x.name).toLowerCase() === n.toLowerCase() && x.password === p);
     if (!m) { setForm(f=>({...f,error:"Неверное имя или пароль"})); return; }
     setUser({ name:m.name, isAdmin:false });
     const existing = requests[m.name] || {};
-    setDrafts({ [curKey]: existing[curKey] || {}, [nextKey]: existing[nextKey] || {} });
+    setDrafts({
+      [curKey]:  existing[curKey]  || {},
+      [nextKey]: existing[nextKey] || {},
+    });
     setSaved({}); setPage("pick");
     setForm({ name:"", password:"", error:"" });
   }
@@ -126,7 +175,10 @@ export default function App() {
   function toggleShift(weekKey, dayKey, shiftId) {
     setDrafts(prev => ({
       ...prev,
-      [weekKey]: { ...(prev[weekKey]||{}), [dayKey]: (prev[weekKey]||{})[dayKey] === shiftId ? null : shiftId }
+      [weekKey]: {
+        ...(prev[weekKey] || {}),
+        [dayKey]: (prev[weekKey] || {})[dayKey] === shiftId ? null : shiftId,
+      }
     }));
     setSaved(s => ({ ...s, [weekKey]: false }));
   }
@@ -134,40 +186,45 @@ export default function App() {
   async function handleSave(weekKey) {
     setSaving(s => ({ ...s, [weekKey]: true }));
     try {
-      await setDoc(doc(db, "schedules", user.name), { ...(requests[user.name]||{}), [weekKey]: drafts[weekKey] || {} });
+      const existing = requests[user.name] || {};
+      await setDoc(doc(db, "schedules", user.name), {
+        ...existing,
+        [weekKey]: drafts[weekKey] || {},
+      });
       setSaved(s => ({ ...s, [weekKey]: true }));
-    } catch(e) { alert("Ошибка сохранения."); }
+    } catch(e) {
+      alert("Ошибка сохранения. Попробуй ещё раз.");
+    }
     setSaving(s => ({ ...s, [weekKey]: false }));
   }
 
-  async function managerEditShift(memberName, weekKey, dayKey, newShiftId) {
-    const existing = requests[memberName] || {};
-    const weekData = { ...(existing[weekKey] || {}) };
-    if (newShiftId === null) { delete weekData[dayKey]; } else { weekData[dayKey] = newShiftId; }
-    await setDoc(doc(db, "schedules", memberName), { ...existing, [weekKey]: weekData });
-    setEditModal(null);
-  }
-
   function submittedFor(weekKey) {
-    return TEAM.filter(m => { const d=(requests[m.name]||{})[weekKey]; return d && Object.values(d).some(v=>v); });
+    return TEAM.filter(m => {
+      const d = (requests[m.name] || {})[weekKey];
+      return d && Object.values(d).some(v => v);
+    });
   }
 
   function getSchedWarnings(days, weekKey) {
     const w = {};
-    days.forEach(d => { const unc=getUncoveredShifts(requests,d.key,weekKey); if(unc.length>0) w[d.key]=unc; });
+    days.forEach(d => {
+      const unc = getUncoveredShifts(requests, d.key, weekKey);
+      if (unc.length > 0) w[d.key] = unc;
+    });
     return w;
   }
 
   function getDraftWarnings(weekKey, days) {
-    if (!user||user.isAdmin) return {};
+    if (!user || user.isAdmin) return {};
     const w = {};
     days.forEach(d => {
-      if ((drafts[weekKey]||{})[d.key]) return;
+      const myChoice = (drafts[weekKey] || {})[d.key];
+      if (myChoice) return;
       const sim = {};
-      TEAM.forEach(m => { sim[m.name]={...((requests[m.name]||{})[weekKey]||{})}; });
-      sim[user.name] = {...(drafts[weekKey]||{})};
-      const unc = SHIFTS.filter(sh=>!TEAM.some(m=>(sim[m.name]||{})[d.key]===sh.id)).map(s=>s.id);
-      if (unc.length>0) w[d.key]=unc;
+      TEAM.forEach(m => { sim[m.name] = { ...((requests[m.name] || {})[weekKey] || {}) }; });
+      sim[user.name] = { ...(drafts[weekKey] || {}) };
+      const unc = SHIFTS.filter(sh => !TEAM.some(m => (sim[m.name]||{})[d.key] === sh.id)).map(s=>s.id);
+      if (unc.length > 0) w[d.key] = unc;
     });
     return w;
   }
@@ -179,90 +236,36 @@ export default function App() {
   const curDraftW  = getDraftWarnings(curKey,  curDays);
   const nextDraftW = getDraftWarnings(nextKey, nextDays);
 
-  function EditModal() {
-    if (!editModal) return null;
-    const { memberName, weekKey, dayKey, dayLabel, currentShift, assignShift } = editModal;
-    const wLabel = weekKey === curKey ? "Текущая неделя" : "Следующая неделя";
-    const curSchedForModal = weekKey === curKey ? curSched : nextSched;
+  const btnStyle = { transition:"all .15s ease", cursor:"pointer" };
 
-    if (!memberName) {
-      const taken = curSchedForModal[dayKey]?.[assignShift] || [];
-      const available = TEAM.filter(m => {
-        const memberShift = ((requests[m.name]||{})[weekKey]||{})[dayKey];
-        return !memberShift;
-      });
-      return (
-        <div style={{ position:"fixed", inset:0, background:"rgba(15,23,42,0.5)", zIndex:100, display:"flex", alignItems:"center", justifyContent:"center", padding:20 }} onClick={()=>setEditModal(null)}>
-          <div style={{ background:"white", borderRadius:16, padding:24, maxWidth:360, width:"100%", boxShadow:"0 20px 60px rgba(0,0,0,0.2)" }} onClick={e=>e.stopPropagation()}>
-            <div style={{ fontWeight:800, fontSize:16, color:"#1e3a8a", marginBottom:4 }}>Назначить на смену</div>
-            <div style={{ fontSize:12, color:"#64748b", marginBottom:16 }}>{dayLabel} · {wLabel} · {SHIFTS.find(s=>s.id===assignShift)?.emoji} {SHIFTS.find(s=>s.id===assignShift)?.label}</div>
-            {available.length === 0 ? (
-              <div style={{ color:"#94a3b8", fontSize:13, textAlign:"center", padding:"16px 0" }}>Все сотрудники уже заняты в этот день</div>
-            ) : (
-              <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
-                {available.map(m => (
-                  <button key={m.name} onClick={()=>managerEditShift(m.name, weekKey, dayKey, assignShift)}
-                    style={{ padding:"10px 14px", borderRadius:10, background:"#f8fafc", border:"1px solid #e2e8f0", color:"#1e293b", fontSize:13, fontWeight:600, cursor:"pointer", textAlign:"left" }}>
-                    👤 {m.name}
-                  </button>
-                ))}
-              </div>
-            )}
-            <button onClick={()=>setEditModal(null)} style={{ marginTop:16, width:"100%", padding:"10px", borderRadius:10, background:"#f1f5f9", border:"none", color:"#64748b", fontSize:13, fontWeight:600, cursor:"pointer" }}>Отмена</button>
-          </div>
-        </div>
-      );
-    }
-
-    const sh = SHIFTS.find(s=>s.id===currentShift);
-    return (
-      <div style={{ position:"fixed", inset:0, background:"rgba(15,23,42,0.5)", zIndex:100, display:"flex", alignItems:"center", justifyContent:"center", padding:20 }} onClick={()=>setEditModal(null)}>
-        <div style={{ background:"white", borderRadius:16, padding:24, maxWidth:380, width:"100%", boxShadow:"0 20px 60px rgba(0,0,0,0.2)" }} onClick={e=>e.stopPropagation()}>
-          <div style={{ fontWeight:800, fontSize:16, color:"#1e3a8a", marginBottom:4 }}>Изменить смену</div>
-          <div style={{ fontSize:12, color:"#64748b", marginBottom:2 }}>{memberName} · {dayLabel}</div>
-          <div style={{ fontSize:12, color:"#64748b", marginBottom:16 }}>{wLabel}</div>
-          <div style={{ background:"#f8fafc", borderRadius:10, padding:"10px 14px", marginBottom:16, display:"flex", alignItems:"center", gap:8 }}>
-            <span style={{ fontSize:13, color:"#94a3b8" }}>Сейчас:</span>
-            <span style={{ background:sh?.bg, border:`1px solid ${sh?.border}`, color:sh?.textDark, borderRadius:6, padding:"2px 10px", fontSize:12, fontWeight:700 }}>{sh?.emoji} {sh?.label}</span>
-          </div>
-          <div style={{ fontSize:12, fontWeight:700, color:"#374151", marginBottom:8 }}>Изменить на:</div>
-          <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
-            {SHIFTS.filter(s=>s.id!==currentShift).map(shift => (
-              <button key={shift.id} onClick={()=>managerEditShift(memberName, weekKey, dayKey, shift.id)}
-                style={{ padding:"10px 14px", borderRadius:10, background:shift.bg, border:`1px solid ${shift.border}`, color:shift.textDark, fontSize:13, fontWeight:700, cursor:"pointer", textAlign:"left" }}>
-                {shift.emoji} {shift.label}
-              </button>
-            ))}
-            <button onClick={()=>managerEditShift(memberName, weekKey, dayKey, null)}
-              style={{ padding:"10px 14px", borderRadius:10, background:"#fef2f2", border:"1px solid #fecaca", color:"#dc2626", fontSize:13, fontWeight:700, cursor:"pointer", textAlign:"left" }}>
-              🏖 Убрать смену (выходной)
-            </button>
-          </div>
-          <button onClick={()=>setEditModal(null)} style={{ marginTop:12, width:"100%", padding:"10px", borderRadius:10, background:"#f1f5f9", border:"none", color:"#64748b", fontSize:13, fontWeight:600, cursor:"pointer" }}>Отмена</button>
-        </div>
-      </div>
-    );
-  }
-
+  // ── WEEK PICKER BLOCK ────────────────────────────────────
   function WeekPicker({ days, weekKey, label }) {
-    const draft = drafts[weekKey] || {};
+    const draft    = drafts[weekKey] || {};
+    const isSaved  = !!saved[weekKey];
+    const isSaving = !!saving[weekKey];
+    const draftWarn = weekKey === curKey ? curDraftW : nextDraftW;
+
     return (
-      <div style={{ marginBottom:32 }}>
+      <div style={{ marginBottom:36 }}>
         <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:14, flexWrap:"wrap", gap:8 }}>
           <div>
             <div style={{ fontSize:11, fontWeight:700, color:"#94a3b8", textTransform:"uppercase", letterSpacing:"0.06em" }}>{label}</div>
             <div style={{ fontSize:20, fontWeight:800, color:"#1e3a8a", marginTop:2 }}>{weekLabel(days)}</div>
           </div>
           <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-            {saved[weekKey] && <span style={{ color:"#16a34a", fontWeight:700, fontSize:13 }}>✅ Сохранено!</span>}
-            <button onClick={()=>handleSave(weekKey)} disabled={!!saving[weekKey]} style={{ padding:"10px 22px", background:saving[weekKey]?"#93c5fd":"linear-gradient(135deg,#1d4ed8,#1e3a8a)", borderRadius:10, color:"white", fontSize:13, fontWeight:700, border:"none", cursor:"pointer", boxShadow:"0 3px 10px rgba(29,78,216,0.3)" }}>
-              {saving[weekKey] ? "Сохраняем..." : "💾 Подать заявку"}
+            {isSaved && <span style={{ color:"#16a34a", fontWeight:700, fontSize:13 }}>✅ Сохранено!</span>}
+            <button onClick={()=>handleSave(weekKey)} disabled={isSaving} style={{ ...btnStyle, padding:"10px 22px", background:isSaving?"#93c5fd":"linear-gradient(135deg,#1d4ed8,#1e3a8a)", borderRadius:10, color:"white", fontSize:13, fontWeight:700, border:"none", boxShadow:"0 3px 10px rgba(29,78,216,0.3)" }}>
+              {isSaving ? "Сохраняем..." : "💾 Подать заявку"}
             </button>
           </div>
         </div>
+
+
+
         <div style={{ display:"flex", flexDirection:"column", gap:7 }}>
           {days.map(d => {
             const picked = draft[d.key];
+            const warn   = draftWarn[d.key];
             const pickedShift = SHIFTS.find(s=>s.id===picked);
             return (
               <div key={d.key} style={{ background:"white", borderRadius:12, boxShadow:"0 1px 3px rgba(0,0,0,0.07)", padding:"12px 16px", border:`2px solid ${d.isToday?"#3b82f6":"#f1f5f9"}`, display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
@@ -271,22 +274,28 @@ export default function App() {
                   <div style={{ fontSize:11, color:"#94a3b8", marginTop:1 }}>{d.date}</div>
                 </div>
                 {d.isToday && <span style={{ background:"#dbeafe", color:"#1d4ed8", borderRadius:6, padding:"2px 7px", fontSize:10, fontWeight:700 }}>СЕГОДНЯ</span>}
-                {picked && pickedShift && <span style={{ background:pickedShift.bg, border:`1px solid ${pickedShift.border}`, color:pickedShift.textDark, borderRadius:7, padding:"3px 10px", fontSize:11, fontWeight:700 }}>{pickedShift.emoji} {pickedShift.label}</span>}
+                {picked && pickedShift && (
+                  <span style={{ background:pickedShift.bg, border:`1px solid ${pickedShift.border}`, color:pickedShift.textDark, borderRadius:7, padding:"3px 10px", fontSize:11, fontWeight:700 }}>
+                    {pickedShift.emoji} {pickedShift.label}
+                  </span>
+                )}
                 <div style={{ display:"flex", gap:5, flex:1, flexWrap:"wrap", justifyContent:"flex-end" }}>
                   {SHIFTS.map(shift => {
-                    const active = picked === shift.id;
-                    const count  = countForShift(requests, weekKey, d.key, shift.id);
-                    const full   = count >= MAX_PER_SHIFT && !active;
+                    const active  = picked === shift.id;
+                    const count   = countForShift(requests, weekKey, d.key, shift.id);
+                    const full    = count >= MAX_PER_SHIFT && !active;
                     return (
-                      <button key={shift.id} onClick={()=>!full&&toggleShift(weekKey,d.key,shift.id)} title={full?`Смена заполнена (${count}/${MAX_PER_SHIFT})`:""}
-                        style={{ padding:"7px 11px", borderRadius:8, background:active?shift.bg:full?"#f1f5f9":"#f8fafc", border:`2px solid ${active?shift.accent:"#e2e8f0"}`, color:active?shift.textDark:full?"#cbd5e1":"#64748b", fontSize:11, fontWeight:700, opacity:full?0.5:1, cursor:full?"not-allowed":"pointer", position:"relative", transition:"all .15s" }}>
+                      <button key={shift.id} onClick={()=>!full && toggleShift(weekKey,d.key,shift.id)}
+                        title={full ? `Смена заполнена (${count}/${MAX_PER_SHIFT})` : ""}
+                        style={{ ...btnStyle, padding:"7px 11px", borderRadius:8, background:active?shift.bg:full?"#f1f5f9":"#f8fafc", border:`2px solid ${active?shift.accent:full?"#e2e8f0":"#e2e8f0"}`, color:active?shift.textDark:full?"#cbd5e1":"#64748b", fontSize:11, fontWeight:700, opacity:full?0.55:1, cursor:full?"not-allowed":"pointer", position:"relative" }}>
                         {shift.emoji} {shift.short}
                         {full && <span style={{ position:"absolute", top:-6, right:-6, background:"#ef4444", color:"white", borderRadius:"50%", width:14, height:14, fontSize:9, fontWeight:800, display:"flex", alignItems:"center", justifyContent:"center" }}>✕</span>}
-                        {!full&&count>0&&!active && <span style={{ position:"absolute", top:-6, right:-6, background:"#f59e0b", color:"white", borderRadius:"50%", width:14, height:14, fontSize:9, fontWeight:800, display:"flex", alignItems:"center", justifyContent:"center" }}>{count}</span>}
+                        {!full && count > 0 && !active && <span style={{ position:"absolute", top:-6, right:-6, background:"#f59e0b", color:"white", borderRadius:"50%", width:14, height:14, fontSize:9, fontWeight:800, display:"flex", alignItems:"center", justifyContent:"center" }}>{count}</span>}
                       </button>
                     );
                   })}
-                  <button onClick={()=>toggleShift(weekKey,d.key,null)} style={{ padding:"7px 11px", borderRadius:8, background:!picked?"#fef2f2":"#f8fafc", border:`2px solid ${!picked?"#fca5a5":"#e2e8f0"}`, color:!picked?"#dc2626":"#94a3b8", fontSize:11, fontWeight:700, cursor:"pointer", transition:"all .15s" }}>
+                  <button onClick={()=>toggleShift(weekKey,d.key,null)}
+                    style={{ ...btnStyle, padding:"7px 11px", borderRadius:8, background:!picked?"#fef2f2":"#f8fafc", border:`2px solid ${!picked?"#fca5a5":"#e2e8f0"}`, color:!picked?"#dc2626":"#94a3b8", fontSize:11, fontWeight:700 }}>
                     🏖 Вых.
                   </button>
                 </div>
@@ -298,6 +307,7 @@ export default function App() {
     );
   }
 
+  // ── WEEK SCHEDULE BLOCK ──────────────────────────────────
   function WeekSchedule({ days, weekKey, sched, warnings, label }) {
     const sub = submittedFor(weekKey);
     const totalWarn = Object.values(warnings).reduce((a,b)=>a+b.length,0);
@@ -310,12 +320,13 @@ export default function App() {
           </div>
           <div style={{ fontSize:13, color:"#64748b" }}>Подали: <span style={{ color:"#1d4ed8", fontWeight:700 }}>{sub.length}</span> / {TEAM.length}</div>
         </div>
-        {totalWarn>0 && (
+
+        {totalWarn > 0 && (
           <div style={{ background:"#fff7ed", border:"1px solid #fed7aa", borderRadius:10, padding:"12px 16px", marginBottom:12 }}>
             <div style={{ fontWeight:700, color:"#c2410c", fontSize:13, marginBottom:6 }}>⚠️ Незакрытые смены ({totalWarn})</div>
             {days.map(d => {
-              const unc=warnings[d.key];
-              if(!unc||unc.length===0) return null;
+              const unc = warnings[d.key];
+              if (!unc||unc.length===0) return null;
               return (
                 <div key={d.key} style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", marginBottom:3 }}>
                   <span style={{ fontSize:12, color:"#92400e", fontWeight:600, minWidth:55 }}>{d.label} {d.date}</span>
@@ -326,12 +337,14 @@ export default function App() {
             })}
           </div>
         )}
-        {totalWarn===0&&sub.length===TEAM.length && (
+
+        {totalWarn===0 && sub.length===TEAM.length && (
           <div style={{ background:"#f0fdf4", border:"1px solid #bbf7d0", borderRadius:10, padding:"12px 16px", marginBottom:12, display:"flex", alignItems:"center", gap:8 }}>
-            <span>✅</span><span style={{ fontWeight:700, color:"#16a34a", fontSize:13 }}>Все смены закрыты!</span>
+            <span>✅</span><span style={{ fontWeight:700, color:"#16a34a", fontSize:13 }}>Все смены закрыты! Расписание готово.</span>
           </div>
         )}
-        <div style={{ background:"white", borderRadius:14, boxShadow:"0 1px 4px rgba(0,0,0,0.06)", overflow:"hidden" }}>
+
+        <div style={{ background:"white", borderRadius:14, boxShadow:"0 1px 4px rgba(0,0,0,0.06),0 4px 16px rgba(29,78,216,0.06)", overflow:"hidden" }}>
           <div style={{ overflowX:"auto" }}>
             <table style={{ width:"100%", borderCollapse:"collapse", minWidth:600 }}>
               <thead>
@@ -362,19 +375,23 @@ export default function App() {
                       const people = sched[d.key][shift.id] || [];
                       const isUnc  = (warnings[d.key]||[]).includes(shift.id);
                       const isFull = people.length >= MAX_PER_SHIFT;
+                      // find members NOT in this shift for this day (for admin to assign)
                       return (
-                        <td key={d.key} style={{ padding:"8px 6px", textAlign:"center", verticalAlign:"middle", borderRight:"1px solid #f1f5f9", background:isUnc?"#fff7ed":d.isToday?"#eff6ff":"transparent" }}>
+                        <td key={d.key} style={{ padding:"8px 6px", textAlign:"center", verticalAlign:"middle", borderRight:"1px solid #f1f5f9", background:isUnc?"#fff7ed":d.isToday?"#eff6ff":"transparent", position:"relative" }}>
                           <div style={{ display:"flex", flexDirection:"column", gap:3 }}>
-                            {people.length===0 && <span style={{ color:isUnc?"#f97316":"#e2e8f0", fontSize:isUnc?16:20, fontWeight:700 }}>{isUnc?"✗":"·"}</span>}
+                            {people.length===0 && (
+                              <span style={{ color:isUnc?"#f97316":"#e2e8f0", fontSize:isUnc?16:20, fontWeight:700 }}>{isUnc?"✗":"·"}</span>
+                            )}
                             {people.map(p => (
                               <div key={p}
-                                onClick={()=>user?.isAdmin&&setEditModal({ memberName:p, weekKey, dayKey:d.key, dayLabel:`${d.label} ${d.date}`, currentShift:shift.id })}
+                                onClick={()=> user?.isAdmin && setEditModal({ memberName:p, weekKey, dayKey:d.key, dayLabel:`${d.label} ${d.date}`, currentShift:shift.id })}
                                 style={{ background:shift.bg, border:`1px solid ${shift.border}`, borderRadius:6, padding:"2px 7px", fontSize:10, fontWeight:600, color:shift.textDark, whiteSpace:"nowrap", cursor:user?.isAdmin?"pointer":"default", display:"flex", alignItems:"center", gap:3 }}>
-                                {p.split(" ")[0]}{user?.isAdmin&&<span style={{ fontSize:9, opacity:0.5 }}>✏️</span>}
+                                {p.split(" ")[0]}
+                                {user?.isAdmin && <span style={{ fontSize:9, opacity:0.5 }}>✏️</span>}
                               </div>
                             ))}
                             {isFull && <div style={{ fontSize:9, color:"#16a34a", fontWeight:700 }}>✓ закрыто</div>}
-                            {user?.isAdmin&&isUnc && (
+                            {user?.isAdmin && isUnc && (
                               <button onClick={()=>setEditModal({ memberName:null, weekKey, dayKey:d.key, dayLabel:`${d.label} ${d.date}`, currentShift:shift.id, assignShift:shift.id })}
                                 style={{ background:"#fff7ed", border:"1px dashed #fb923c", borderRadius:6, padding:"2px 6px", fontSize:9, fontWeight:700, color:"#c2410c", cursor:"pointer" }}>+ назначить</button>
                             )}
@@ -388,14 +405,124 @@ export default function App() {
             </table>
           </div>
         </div>
-        {TEAM.filter(m=>!sub.find(s=>s.name===m.name)).length>0 && (
+
+        {TEAM.filter(m=>!submittedFor(weekKey).find(s=>s.name===m.name)).length>0 && (
           <div style={{ marginTop:12, background:"#fef2f2", border:"1px solid #fecaca", borderRadius:10, padding:"12px 16px", display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
             <span style={{ fontSize:13, color:"#dc2626", fontWeight:700 }}>⏳ Не подали:</span>
-            {TEAM.filter(m=>!sub.find(s=>s.name===m.name)).map(m => (
+            {TEAM.filter(m=>!submittedFor(weekKey).find(s=>s.name===m.name)).map(m => (
               <span key={m.name} style={{ background:"white", border:"1px solid #fecaca", color:"#dc2626", borderRadius:7, padding:"2px 9px", fontSize:12, fontWeight:600 }}>{m.name.split(" ")[0]}</span>
             ))}
           </div>
         )}
+      </div>
+    );
+  }
+
+  // ── EDIT MODAL ───────────────────────────────────────────
+  function AnnouncementsBlock() {
+    return (
+      <div style={{ marginBottom:28, background:"white", borderRadius:16, padding:20, boxShadow:"0 1px 4px rgba(0,0,0,0.06),0 4px 16px rgba(29,78,216,0.06)" }}>
+        <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:16 }}>
+          <span style={{ fontSize:20 }}>📢</span>
+          <h3 style={{ fontWeight:800, color:"#1e3a8a", fontSize:16 }}>Объявления</h3>
+        </div>
+        {user?.isAdmin && (
+          <div style={{ display:"flex", gap:8, marginBottom:20 }}>
+            <input value={newAnnMsg} onChange={e=>setNewAnnMsg(e.target.value)} onKeyDown={e=>e.key==="Enter"&&postAnnouncement()}
+              placeholder="Напишите важное сообщение для команды..."
+              style={{ flex:1, padding:"10px 14px", background:"#f8fafc", border:"2px solid #e2e8f0", borderRadius:10, fontSize:13, fontFamily:"inherit", outline:"none" }} />
+            <button onClick={postAnnouncement} style={{ padding:"10px 20px", background:"linear-gradient(135deg,#1d4ed8,#1e3a8a)", color:"white", borderRadius:10, fontWeight:700, fontSize:13, border:"none", cursor:"pointer", whiteSpace:"nowrap" }}>
+              📤 Отправить
+            </button>
+          </div>
+        )}
+        <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+          {announcements.length===0 && (
+            <div style={{ color:"#94a3b8", fontSize:13, textAlign:"center", padding:"12px 0" }}>Пока нет объявлений</div>
+          )}
+          {announcements.map(ann => (
+            <div key={ann.id} style={{ padding:12, borderRadius:10, background:"#f0fdf4", border:"1px solid #bbf7d0", position:"relative" }}>
+              <div style={{ fontSize:13, color:"#166534", lineHeight:1.6, whiteSpace:"pre-wrap", paddingRight: user?.isAdmin ? 24 : 0 }}>{ann.text}</div>
+              <div style={{ display:"flex", justifyContent:"space-between", marginTop:8, fontSize:10, color:"#16a34a", fontWeight:600 }}>
+                <span>от {ann.author?.split(" ")[0]}</span>
+                <span>{new Date(ann.createdAt).toLocaleString("ru-RU", { day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" })}</span>
+              </div>
+              {user?.isAdmin && (
+                <button onClick={()=>deleteAnnouncement(ann.id)} style={{ position:"absolute", top:8, right:8, background:"none", border:"none", color:"#86efac", fontSize:14, cursor:"pointer", lineHeight:1 }} title="Удалить">✕</button>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  function EditModal() {
+    if (!editModal) return null;
+    const { memberName, weekKey, dayKey, dayLabel, currentShift, assignShift } = editModal;
+    const weekLabel2 = weekKey === curKey ? "Текущая неделя" : "Следующая неделя";
+
+    // If assignShift mode — pick a member to assign
+    if (!memberName) {
+      const alreadyInShift = sched => {
+        const s = weekKey === curKey ? curSched : nextSched;
+        return (s[dayKey]?.[assignShift] || []);
+      };
+      const taken = (weekKey === curKey ? curSched : nextSched)[dayKey]?.[assignShift] || [];
+      const available = TEAM.filter(m => {
+        const memberShift = ((requests[m.name]||{})[weekKey]||{})[dayKey];
+        return !memberShift; // not assigned anywhere this day
+      });
+      return (
+        <div style={{ position:"fixed", inset:0, background:"rgba(15,23,42,0.5)", zIndex:100, display:"flex", alignItems:"center", justifyContent:"center", padding:20 }} onClick={()=>setEditModal(null)}>
+          <div style={{ background:"white", borderRadius:16, padding:24, maxWidth:360, width:"100%", boxShadow:"0 20px 60px rgba(0,0,0,0.2)" }} onClick={e=>e.stopPropagation()}>
+            <div style={{ fontWeight:800, fontSize:16, color:"#1e3a8a", marginBottom:4 }}>Назначить на смену</div>
+            <div style={{ fontSize:12, color:"#64748b", marginBottom:16 }}>{dayLabel} · {weekLabel2} · {SHIFTS.find(s=>s.id===assignShift)?.emoji} {SHIFTS.find(s=>s.id===assignShift)?.label}</div>
+            {available.length === 0 ? (
+              <div style={{ color:"#94a3b8", fontSize:13, textAlign:"center", padding:"16px 0" }}>Все сотрудники уже заняты в этот день</div>
+            ) : (
+              <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                {available.map(m => (
+                  <button key={m.name} onClick={()=>managerEditShift(m.name, weekKey, dayKey, assignShift)}
+                    style={{ padding:"10px 14px", borderRadius:10, background:"#f8fafc", border:"1px solid #e2e8f0", color:"#1e293b", fontSize:13, fontWeight:600, cursor:"pointer", textAlign:"left" }}>
+                    👤 {m.name}
+                  </button>
+                ))}
+              </div>
+            )}
+            <button onClick={()=>setEditModal(null)} style={{ marginTop:16, width:"100%", padding:"10px", borderRadius:10, background:"#f1f5f9", border:"none", color:"#64748b", fontSize:13, fontWeight:600, cursor:"pointer" }}>Отмена</button>
+          </div>
+        </div>
+      );
+    }
+
+    // Edit existing member's shift
+    const sh = SHIFTS.find(s=>s.id===currentShift);
+    return (
+      <div style={{ position:"fixed", inset:0, background:"rgba(15,23,42,0.5)", zIndex:100, display:"flex", alignItems:"center", justifyContent:"center", padding:20 }} onClick={()=>setEditModal(null)}>
+        <div style={{ background:"white", borderRadius:16, padding:24, maxWidth:380, width:"100%", boxShadow:"0 20px 60px rgba(0,0,0,0.2)" }} onClick={e=>e.stopPropagation()}>
+          <div style={{ fontWeight:800, fontSize:16, color:"#1e3a8a", marginBottom:4 }}>Изменить смену</div>
+          <div style={{ fontSize:12, color:"#64748b", marginBottom:2 }}>{memberName} · {dayLabel}</div>
+          <div style={{ fontSize:12, color:"#64748b", marginBottom:16 }}>{weekLabel2}</div>
+          <div style={{ background:"#f8fafc", borderRadius:10, padding:"10px 14px", marginBottom:16, display:"flex", alignItems:"center", gap:8 }}>
+            <span style={{ fontSize:13, color:"#94a3b8" }}>Текущая смена:</span>
+            <span style={{ background:sh?.bg, border:`1px solid ${sh?.border}`, color:sh?.textDark, borderRadius:6, padding:"2px 10px", fontSize:12, fontWeight:700 }}>{sh?.emoji} {sh?.label}</span>
+          </div>
+          <div style={{ fontSize:12, fontWeight:700, color:"#374151", marginBottom:8 }}>Изменить на:</div>
+          <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+            {SHIFTS.filter(s=>s.id!==currentShift).map(shift => (
+              <button key={shift.id} onClick={()=>managerEditShift(memberName, weekKey, dayKey, shift.id)}
+                style={{ padding:"10px 14px", borderRadius:10, background:shift.bg, border:`1px solid ${shift.border}`, color:shift.textDark, fontSize:13, fontWeight:700, cursor:"pointer", textAlign:"left", display:"flex", alignItems:"center", gap:8 }}>
+                {shift.emoji} {shift.label}
+              </button>
+            ))}
+            <button onClick={()=>managerEditShift(memberName, weekKey, dayKey, null)}
+              style={{ padding:"10px 14px", borderRadius:10, background:"#fef2f2", border:"1px solid #fecaca", color:"#dc2626", fontSize:13, fontWeight:700, cursor:"pointer", textAlign:"left" }}>
+              🏖 Убрать смену (выходной)
+            </button>
+          </div>
+          <button onClick={()=>setEditModal(null)} style={{ marginTop:12, width:"100%", padding:"10px", borderRadius:10, background:"#f1f5f9", border:"none", color:"#64748b", fontSize:13, fontWeight:600, cursor:"pointer" }}>Отмена</button>
+        </div>
       </div>
     );
   }
@@ -418,6 +545,7 @@ export default function App() {
         .fade{animation:fadeUp .25s ease both} @keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
       `}</style>
 
+      {/* HEADER */}
       <header style={{ background:"#1e3a8a", padding:"0 24px", display:"flex", alignItems:"center", justifyContent:"space-between", height:60, boxShadow:"0 2px 12px rgba(30,58,138,0.3)", position:"sticky", top:0, zIndex:10 }}>
         <div style={{ display:"flex", alignItems:"center", gap:12 }}>
           <div style={{ width:36, height:36, background:"rgba(255,255,255,0.15)", borderRadius:10, display:"flex", alignItems:"center", justifyContent:"center", fontSize:18 }}>🏏</div>
@@ -429,11 +557,11 @@ export default function App() {
         <div style={{ display:"flex", gap:8, alignItems:"center" }}>
           {user && <>
             <div style={{ background:"rgba(255,255,255,0.12)", borderRadius:8, padding:"5px 12px", fontSize:12, fontWeight:600, color:"white", display:"flex", alignItems:"center", gap:6 }}>
-              {user.isAdmin?"👑":"👤"} {user.name}
+              {user.isAdmin ? "👑" : "👤"} {user.name}
             </div>
             {!user.isAdmin && (
-              <button onClick={()=>setPage(page==="schedule"?"pick":"schedule")} style={{ background:"rgba(255,255,255,0.12)", border:"1px solid rgba(255,255,255,0.2)", color:"white", borderRadius:8, padding:"6px 13px", fontSize:12, fontWeight:600, cursor:"pointer" }}>
-                {page==="schedule"?"✏️ Мои смены":"📋 Расписание"}
+              <button onClick={() => setPage(page==="schedule"?"pick":"schedule")} style={{ background:"rgba(255,255,255,0.12)", border:"1px solid rgba(255,255,255,0.2)", color:"white", borderRadius:8, padding:"6px 13px", fontSize:12, fontWeight:600, cursor:"pointer" }}>
+                {page==="schedule" ? "✏️ Мои смены" : "📋 Расписание"}
               </button>
             )}
             <button onClick={logout} style={{ background:"rgba(239,68,68,0.2)", border:"1px solid rgba(239,68,68,0.3)", color:"#fca5a5", borderRadius:8, padding:"6px 13px", fontSize:12, fontWeight:600, cursor:"pointer" }}>Выйти</button>
@@ -443,6 +571,9 @@ export default function App() {
 
       <main style={{ maxWidth:920, margin:"0 auto", padding:"32px 20px 60px" }}>
 
+        {user && <AnnouncementsBlock />}
+
+        {/* LOGIN */}
         {page==="login" && (
           <div className="fade" style={{ maxWidth:420, margin:"0 auto" }}>
             <div style={{ background:"white", borderRadius:20, boxShadow:"0 4px 24px rgba(29,78,216,0.1)", padding:"40px 36px" }}>
@@ -452,8 +583,8 @@ export default function App() {
                 <p style={{ color:"#64748b", fontSize:14 }}>Cricket Live · Управление сменами</p>
               </div>
               <div style={{ marginBottom:16 }}>
-                <label style={{ fontSize:12, fontWeight:700, color:"#374151", letterSpacing:"0.04em", display:"block", marginBottom:6 }}>ЛОГИН</label>
-                <input value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value,error:""}))} onKeyDown={e=>e.key==="Enter"&&pwdRef.current?.focus()} placeholder="arman, gor, maro..."
+                <label style={{ fontSize:12, fontWeight:700, color:"#374151", letterSpacing:"0.04em", display:"block", marginBottom:6 }}>ИМЯ</label>
+                <input value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value,error:""}))} onKeyDown={e=>e.key==="Enter"&&pwdRef.current?.focus()} placeholder="Введи своё имя..."
                   style={{ width:"100%", padding:"12px 14px", background:"#f8fafc", border:"2px solid #e2e8f0", borderRadius:10, color:"#1e293b", fontSize:14, fontWeight:500 }} />
               </div>
               <div style={{ marginBottom:24 }}>
@@ -475,45 +606,50 @@ export default function App() {
           </div>
         )}
 
+        {/* SHIFT PICKER */}
         {page==="pick" && user && !user.isAdmin && (
           <div className="fade">
-            <div style={{ marginBottom:24 }}>
+            <div style={{ marginBottom:28 }}>
               <h2 style={{ fontSize:22, fontWeight:800, color:"#1e3a8a", marginBottom:4 }}>Привет, {user.name.split(" ")[0]}! 👋</h2>
               <p style={{ color:"#64748b", fontSize:14 }}>Выбери смены на текущую и следующую неделю</p>
-              <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginTop:10 }}>
-                {SHIFTS.map(s=><span key={s.id} style={{ display:"inline-flex", alignItems:"center", gap:5, padding:"4px 10px", borderRadius:20, background:s.bg, border:`1px solid ${s.border}`, color:s.textDark, fontSize:11, fontWeight:600 }}>{s.emoji} {s.label}</span>)}
-              </div>
-              <div style={{ background:"#dbeafe", border:"1px solid #93c5fd", borderRadius:12, padding:"14px 18px", marginTop:12 }}>
-                <div style={{ display:"flex", gap:8, marginBottom:10 }}>
-                  <span>ℹ️</span>
-                  <span style={{ color:"#1e40af", fontSize:13, fontWeight:600 }}>Максимум <strong>2 сотрудника</strong> на смену. 🟡 = 1 занято, 🔴✕ = заполнено.</span>
-                </div>
-                <div style={{ color:"#1e40af", fontSize:12, lineHeight:1.8, borderTop:"1px solid #bfdbfe", paddingTop:10 }}>
-                  <strong>Как подать заявку:</strong><br/>
-                  1. Выбери смену на каждый день — нажми на кнопку с нужным временем<br/>
-                  2. Если день выходной — нажми 🏖 Вых.<br/>
-                  3. После нажми <strong>💾 Подать заявку</strong><br/>
-                  4. Можно вернуться и изменить смену следующей недели в любой момент до субботы<br/><br/>
-                  <strong>⚠️ Важно:</strong> если хочешь поменять уже поданную смену — обязательно напиши об этом в телеграм чате и договорись с другим сотрудником об обмене.
-                </div>
+              <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginTop:12 }}>
+                {SHIFTS.map(s => <span key={s.id} style={{ display:"inline-flex", alignItems:"center", gap:5, padding:"4px 10px", borderRadius:20, background:s.bg, border:`1px solid ${s.border}`, color:s.textDark, fontSize:11, fontWeight:600 }}>{s.emoji} {s.label}</span>)}
+                <span style={{ display:"inline-flex", alignItems:"center", gap:5, padding:"4px 10px", borderRadius:20, background:"#f8fafc", border:"1px solid #e2e8f0", color:"#64748b", fontSize:11, fontWeight:600 }}>
+                  🟡 = 1 чел, 🔴✕ = заполнено (2/2)
+                </span>
               </div>
             </div>
+
+            <div style={{ background:"#dbeafe", border:"1px solid #93c5fd", borderRadius:12, padding:"14px 18px", marginBottom:24 }}>
+              <div style={{ display:"flex", gap:8, marginBottom:10 }}>
+                <span>ℹ️</span>
+                <span style={{ color:"#1e40af", fontSize:13, fontWeight:600 }}>Максимум <strong>2 сотрудника</strong> на смену. 🟡 = 1 занято, 🔴✕ = заполнено.</span>
+              </div>
+              <div style={{ color:"#1e40af", fontSize:12, lineHeight:1.8, borderTop:"1px solid #bfdbfe", paddingTop:10 }}>
+                <strong>Как подать заявку:</strong><br/>
+                1. Выбери смену на каждый день — нажми на кнопку с нужным временем<br/>
+                2. Если день выходной — нажми 🏖 Вых.<br/>
+                3. Нажми <strong>💾 Подать заявку</strong> — отдельно для каждой недели<br/>
+                4. Можно вернуться и изменить смену в любой момент до закрытия<br/><br/>
+                <strong>⚠️ Важно:</strong> если хочешь поменять уже поданную смену — обязательно напиши об этом в телеграм чате и договорись с другим сотрудником об обмене.
+              </div>
+            </div>
+
             <WeekPicker days={curDays}  weekKey={curKey}  label="Текущая неделя" />
-            <div style={{ height:1, background:"#e2e8f0", margin:"0 0 28px" }} />
+            <div style={{ height:1, background:"#e2e8f0", margin:"8px 0 32px" }} />
             <WeekPicker days={nextDays} weekKey={nextKey} label="Следующая неделя" />
           </div>
         )}
 
+        {/* SCHEDULE */}
         {page==="schedule" && (
           <div className="fade">
-            <div style={{ marginBottom:24 }}>
+            <div style={{ marginBottom:28 }}>
               <h2 style={{ fontSize:22, fontWeight:800, color:"#1e3a8a", marginBottom:4 }}>📋 Сводное расписание</h2>
-              <p style={{ color:"#64748b", fontSize:14 }}>
-                {user?.isAdmin ? "Нажми на имя сотрудника чтобы изменить смену ✏️" : "Текущая и следующая неделя"}
-              </p>
+              <p style={{ color:"#64748b", fontSize:14 }}>Текущая и следующая неделя</p>
             </div>
             <WeekSchedule days={curDays}  weekKey={curKey}  sched={curSched}  warnings={curSchedW}  label="Текущая неделя" />
-            <div style={{ height:1, background:"#e2e8f0", margin:"0 0 28px" }} />
+            <div style={{ height:1, background:"#e2e8f0", margin:"0 0 32px" }} />
             <WeekSchedule days={nextDays} weekKey={nextKey} sched={nextSched} warnings={nextSchedW} label="Следующая неделя" />
           </div>
         )}
