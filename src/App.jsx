@@ -204,7 +204,7 @@ export default function App() {
                   <div style={{ fontSize:11, color:"#94a3b8", marginTop:1 }}>{d.date}</div>
                 </div>
                 {d.isToday && <span style={{ background:"#dbeafe", color:"#1d4ed8", borderRadius:6, padding:"2px 7px", fontSize:10, fontWeight:700 }}>СЕГОДНЯ</span>}
-                {warn&&!picked && <span style={{ background:"#fff7ed", border:"1px solid #fed7aa", color:"#c2410c", borderRadius:6, padding:"2px 8px", fontSize:10, fontWeight:600 }}>⚠️ нет на {warn.map(id=>SHIFTS.find(s=>s.id===id)?.short).join(", ")}</span>}
+                
                 {picked&&pickedShift && <span style={{ background:pickedShift.bg, border:`1px solid ${pickedShift.border}`, color:pickedShift.textDark, borderRadius:7, padding:"3px 10px", fontSize:11, fontWeight:700 }}>{pickedShift.emoji} {pickedShift.label}</span>}
                 <div style={{ display:"flex", gap:5, flex:1, flexWrap:"wrap", justifyContent:"flex-end" }}>
                   {SHIFTS.map(shift => {
