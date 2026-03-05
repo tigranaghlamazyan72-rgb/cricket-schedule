@@ -14,13 +14,13 @@ const firebaseApp = initializeApp(firebaseConfig);
 const db = getFirestore(firebaseApp);
 
 const TEAM = [
-  { name: "Арман Мусаелян",   password: "arman472"  },
-  { name: "Артем Виноградов", password: "artem831"  },
-  { name: "Гор Аракелян",     password: "gor594"    },
-  { name: "Анжела Лойко",     password: "anjela263" },
-  { name: "Маро Тамоян",      password: "maro718"   },
-  { name: "Гоар Акопян",      password: "goar345"   },
-  { name: "Армо Айрапетян",   password: "armo956"   },
+  { name: "Арман Мусаелян",   login: "arman",  password: "arman472"  },
+  { name: "Артем Виноградов", login: "artem",  password: "artem831"  },
+  { name: "Гор Аракелян",     login: "gor",    password: "gor594"    },
+  { name: "Анжела Лойко",     login: "anjela", password: "anjela263" },
+  { name: "Маро Тамоян",      login: "maro",   password: "maro718"   },
+  { name: "Гоар Акопян",      login: "goar",   password: "goar345"   },
+  { name: "Армо Айрапетян",   login: "armo",   password: "armo956"   },
 ];
 const ADMIN = { name: "Менеджер", password: "manager2024" };
 const MAX_PER_SHIFT = 2;
@@ -111,7 +111,7 @@ export default function App() {
       setUser({ name:"Менеджер", isAdmin:true }); setPage("schedule");
       setForm({ name:"", password:"", error:"" }); return;
     }
-    const m = TEAM.find(x => x.name.toLowerCase() === n.toLowerCase() && x.password === p);
+    const m = TEAM.find(x => (x.login || x.name).toLowerCase() === n.toLowerCase() && x.password === p);
     if (!m) { setForm(f=>({...f,error:"Неверное имя или пароль"})); return; }
     setUser({ name:m.name, isAdmin:false });
     const existing = requests[m.name] || {};
