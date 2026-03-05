@@ -14,13 +14,13 @@ const firebaseApp = initializeApp(firebaseConfig);
 const db = getFirestore(firebaseApp);
 
 const TEAM = [
-  { name: "Арман Мусаелян",   login: "arman",  password: "arman472"  },
-  { name: "Артем Виноградов", login: "artem",  password: "artem831"  },
-  { name: "Гор Аракелян",     login: "gor",    password: "gor594"    },
-  { name: "Анжела Лойко",     login: "anjela", password: "anjela263" },
-  { name: "Маро Тамоян",      login: "maro",   password: "maro718"   },
-  { name: "Гоар Акопян",      login: "goar",   password: "goar345"   },
-  { name: "Армо Айрапетян",   login: "armo",   password: "armo956"   },
+  { name: "Арман Мусаелян",   login: "arman",  password: "arman472?"  },
+  { name: "Артем Виноградов", login: "artem",  password: "artem831>"  },
+  { name: "Гор Аракелян",     login: "gor",    password: "gor594-"    },
+  { name: "Анжела Лойко",     login: "anjela", password: "anjela263=" },
+  { name: "Маро Тамоян",      login: "maro",   password: "maro718+"   },
+  { name: "Гоар Акопян",      login: "goar",   password: "goar345*"   },
+  { name: "Армо Айрапетян",   login: "armo",   password: "armo956@"   },
 ];
 const ADMIN = { name: "Менеджер", password: "manager2024" };
 const MAX_PER_SHIFT = 2;
@@ -187,11 +187,7 @@ export default function App() {
             </button>
           </div>
         </div>
-        {Object.keys(draftWarn).length>0 && (
-          <div style={{ background:"#fff7ed", border:"1px solid #fed7aa", borderRadius:10, padding:"10px 14px", marginBottom:12, display:"flex", gap:8, alignItems:"center" }}>
-            <span>⚠️</span><span style={{ color:"#c2410c", fontSize:13, fontWeight:600 }}>Есть дни без сотрудника на смену — отмечены ниже</span>
-          </div>
-        )}
+       
         <div style={{ display:"flex", flexDirection:"column", gap:7 }}>
           {days.map(d => {
             const picked=draft[d.key];
@@ -416,8 +412,8 @@ export default function App() {
     <strong>Как подать заявку:</strong><br/>
     1. Выбери смену на каждый день — нажми на кнопку с нужным временем<br/>
     2. Если день выходной — нажми 🏖 Вых.<br/>
-    3. Нажми <strong>💾 Подать заявку</strong> — отдельно для каждой недели<br/>
-    4. Можно вернуться и изменить смену в любой момент до закрытия<br/><br/>
+    3. После нажми <strong>💾 Подать заявку</strong><br/>
+    4. Можно вернуться и изменить смену на следующую неделю в любой момент до субботы<br/><br/>
     <strong>⚠️ Важно:</strong> если хочешь поменять уже поданную смену — обязательно напиши об этом в телеграм чате и договорись с другим сотрудником об обмене.
   </div>
 </div>
