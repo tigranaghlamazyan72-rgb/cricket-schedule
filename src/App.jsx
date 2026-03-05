@@ -198,7 +198,7 @@ export default function App() {
             const warn=draftWarn[d.key];
             const pickedShift=SHIFTS.find(s=>s.id===picked);
             return (
-              <div key={d.key} style={{ background:"white", borderRadius:12, boxShadow:"0 1px 3px rgba(0,0,0,0.07)", padding:"12px 16px", border:`2px solid ${d.isToday?"#3b82f6":warn&&!picked?"#fb923c":"#f1f5f9"}`, display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+              <div key={d.key} style={{ background:"white", borderRadius:12, boxShadow:"0 1px 3px rgba(0,0,0,0.07)", padding:"12px 16px", border:`2px solid ${d.isToday?"#3b82f6":"#f1f5f9"}`, display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
                 <div style={{ minWidth:64 }}>
                   <div style={{ fontWeight:700, fontSize:14, color:d.isToday?"#1d4ed8":d.isWeekend?"#94a3b8":"#1e293b" }}>{d.label}</div>
                   <div style={{ fontSize:11, color:"#94a3b8", marginTop:1 }}>{d.date}</div>
@@ -407,10 +407,20 @@ export default function App() {
               <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginTop:10 }}>
                 {SHIFTS.map(s=><span key={s.id} style={{ display:"inline-flex", alignItems:"center", gap:5, padding:"4px 10px", borderRadius:20, background:s.bg, border:`1px solid ${s.border}`, color:s.textDark, fontSize:11, fontWeight:600 }}>{s.emoji} {s.label}</span>)}
               </div>
-              <div style={{ background:"#dbeafe", border:"1px solid #93c5fd", borderRadius:10, padding:"10px 14px", marginTop:12, display:"flex", gap:8 }}>
-                <span>ℹ️</span>
-                <span style={{ color:"#1e40af", fontSize:13 }}>Максимум <strong>2 сотрудника</strong> на смену. 🟡 = 1 занято, 🔴✕ = заполнено.</span>
-              </div>
+              <div style={{ background:"#dbeafe", border:"1px solid #93c5fd", borderRadius:12, padding:"14px 18px", marginBottom:24 }}>
+  <div style={{ display:"flex", gap:8, marginBottom:10 }}>
+    <span>ℹ️</span>
+    <span style={{ color:"#1e40af", fontSize:13, fontWeight:600 }}>Максимум <strong>2 сотрудника</strong> на смену. 🟡 = 1 занято, 🔴✕ = заполнено.</span>
+  </div>
+  <div style={{ color:"#1e40af", fontSize:12, lineHeight:1.8, borderTop:"1px solid #bfdbfe", paddingTop:10 }}>
+    <strong>Как подать заявку:</strong><br/>
+    1. Выбери смену на каждый день — нажми на кнопку с нужным временем<br/>
+    2. Если день выходной — нажми 🏖 Вых.<br/>
+    3. Нажми <strong>💾 Подать заявку</strong> — отдельно для каждой недели<br/>
+    4. Можно вернуться и изменить смену в любой момент до закрытия<br/><br/>
+    <strong>⚠️ Важно:</strong> если хочешь поменять уже поданную смену — обязательно напиши об этом в телеграм чате и договорись с другим сотрудником об обмене.
+  </div>
+</div>
             </div>
             <WeekPicker days={curDays}  weekKey={curKey}  label="Текущая неделя" />
             <div style={{ height:1, background:"#e2e8f0", margin:"0 0 28px" }} />
