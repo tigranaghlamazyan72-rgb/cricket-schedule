@@ -823,8 +823,11 @@ export default function App() {
         <div style={{ display:"flex", gap:8, alignItems:"center" }}>
           {user && <>
             <div style={{ background:"rgba(255,255,255,0.12)", borderRadius:8, padding:"5px 12px", fontSize:12, fontWeight:600, color:"white", display:"flex", alignItems:"center", gap:6 }}>
-              {user.isAdmin ? "👑" : "👤"} {user.name}
+              {user.isAdmin ? "👑" : "👤"} <span style={{ color: user.isAdmin ? "white" : nameColor(user.name) }}>{user.name}</span>
             </div>
+            {!user.isAdmin && (
+              <button onClick={()=>setShowProfile(v=>!v)} style={{ background: showProfile ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.12)", border:"1px solid rgba(255,255,255,0.2)", color:"white", borderRadius:8, padding:"6px 13px", fontSize:12, fontWeight:600, cursor:"pointer" }}>🎨 Цвет</button>
+            )}
             {!user.isAdmin && (
               <button onClick={() => setPage(page==="schedule"?"pick":"schedule")} style={{ background:"rgba(255,255,255,0.12)", border:"1px solid rgba(255,255,255,0.2)", color:"white", borderRadius:8, padding:"6px 13px", fontSize:12, fontWeight:600, cursor:"pointer" }}>
                 {page==="schedule" ? "✏️ Мои смены" : "📋 Расписание"}
