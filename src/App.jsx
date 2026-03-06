@@ -463,7 +463,7 @@ export default function App() {
                             {people.map(p => (
                               <div key={p}
                                 onClick={()=> user?.isAdmin && setEditModal({ memberName:p, weekKey, dayKey:d.key, dayLabel:`${d.label} ${d.date}`, currentShift:shift.id })}
-                                style={{ background:shift.bg, border:`1px solid ${shift.border}`, borderRadius:6, padding:"2px 7px", fontSize:10, fontWeight:600, color:shift.textDark, whiteSpace:"nowrap", cursor:user?.isAdmin?"pointer":"default", display:"flex", alignItems:"center", gap:3 }}>
+                                style={{ background:shift.bg, border:`1px solid ${shift.border}`, borderRadius:6, padding:"2px 7px", fontSize:10, fontWeight:700, color:nameColor(p), whiteSpace:"nowrap", cursor:user?.isAdmin?"pointer":"default", display:"flex", alignItems:"center", gap:3 }}>
                                 {p.split(" ")[0]}
                                 {user?.isAdmin && <span style={{ fontSize:9, opacity:0.5 }}>✏️</span>}
                               </div>
