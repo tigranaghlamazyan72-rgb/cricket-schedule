@@ -100,14 +100,33 @@ export default function App() {
   const [announcements, setAnnouncements] = useState([]);
   const [newAnnMsg, setNewAnnMsg] = useState("");
   const [swapRequests, setSwapRequests] = useState([]);
-  const [swapModal, setSwapModal] = useState(null); // { dayKey, dayLabel, fromShift, weekKey }
+  const [swapModal, setSwapModal] = useState(null);
+  const [userColors, setUserColors] = useState({});
+  const [showProfile, setShowProfile] = useState(false);
   const pwdRef = useRef();
+
+  function getAutoColor(name) {
+    let hash = 0;
+    for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
+    const hue = Math.abs(hash) % 360;
+    return `hsl(${hue}, 65%, 42%)`;
+  }
+  function nameColor(name) { return userColors[name] || getAutoColor(name); }
 
   useEffect(() => {
     const unsub = onSnapshot(collection(db, "announcements"), (snapshot) => {
       const docs = [];
       snapshot.forEach(d => docs.push({ id: d.id, ...d.data() }));
       setAnnouncements(docs.sort((a, b) => b.createdAt - a.createdAt));
+    });
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "users"), (snapshot) => {
+      const colors = {};
+      snapshot.forEach(d => { const data = d.data(); if (data.name && data.nameColor) colors[data.name] = data.nameColor; });
+      setUserColors(colors);
     });
     return () => unsub();
   }, []);
@@ -478,6 +497,40 @@ export default function App() {
   }
 
   // ── EDIT MODAL ───────────────────────────────────────────
+  function ProfileSettings() {
+    const [selectedColor, setSelectedColor] = useState(userColors[user?.name] || getAutoColor(user?.name||""));
+    const presets = ["#ef4444","#f59e0b","#10b981","#3b82f6","#8b5cf6","#ec4899","#6366f1","#0891b2","#059669","#dc2626"];
+
+    async function saveColor() {
+      try {
+        await setDoc(doc(db, "users", user.name), { name: user.name, nameColor: selectedColor, lastUpdated: Date.now() }, { merge: true });
+      } catch(e) { alert("Ошибка сохранения"); }
+    }
+
+    if (!user) return null;
+    return (
+      <div style={{ marginBottom:28, background:"white", borderRadius:16, padding:20, boxShadow:"0 1px 4px rgba(0,0,0,0.06),0 4px 16px rgba(29,78,216,0.06)" }}>
+        <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:16 }}>
+          <span style={{ fontSize:20 }}>🎨</span>
+          <h3 style={{ fontWeight:800, color:"#1e3a8a", fontSize:16 }}>Мой цвет</h3>
+        </div>
+        <div style={{ display:"flex", flexWrap:"wrap", gap:10, marginBottom:14 }}>
+          {presets.map(c => (
+            <button key={c} onClick={()=>setSelectedColor(c)} style={{ width:36, height:36, background:c, border:selectedColor===c?"3px solid #1e3a8a":"2px solid #e2e8f0", borderRadius:8, cursor:"pointer", transition:"all .15s" }} />
+          ))}
+        </div>
+        <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:14 }}>
+          <label style={{ fontSize:12, fontWeight:700, color:"#374151" }}>Любой цвет:</label>
+          <input type="color" value={selectedColor} onChange={e=>setSelectedColor(e.target.value)} style={{ width:48, height:36, border:"2px solid #e2e8f0", borderRadius:8, cursor:"pointer", padding:2 }} />
+          <div style={{ fontSize:13, color:"#64748b" }}>Предпросмотр: <span style={{ color:selectedColor, fontWeight:800, fontSize:14 }}>{user.name.split(" ")[0]}</span></div>
+        </div>
+        <button onClick={saveColor} style={{ padding:"9px 20px", background:"linear-gradient(135deg,#1d4ed8,#1e3a8a)", color:"white", borderRadius:10, fontWeight:700, fontSize:13, border:"none", cursor:"pointer" }}>
+          💾 Сохранить
+        </button>
+      </div>
+    );
+  }
+
   function SwapModal() {
     const [targetUser, setTargetUser] = useState("");
     const [toShift, setToShift] = useState("");
@@ -784,6 +837,7 @@ export default function App() {
 
       <main style={{ maxWidth:920, margin:"0 auto", padding:"32px 20px 60px" }}>
 
+        {user && !user.isAdmin && showProfile && <ProfileSettings />}
         {user && <AnnouncementsBlock />}
         {user && <SwapRequestsBlock />}
 
