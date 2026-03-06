@@ -424,10 +424,10 @@ export default function App() {
 
         <div style={{ background:"white", borderRadius:14, boxShadow:"0 1px 4px rgba(0,0,0,0.06),0 4px 16px rgba(29,78,216,0.06)", overflow:"hidden" }}>
           <div style={{ overflowX:"auto" }}>
-            <table style={{ width:"100%", borderCollapse:"collapse", minWidth:600 }}>
+            <table style={{ width:"100%", borderCollapse:"collapse", minWidth:700 }}>
               <thead>
                 <tr style={{ background:"#1e3a8a" }}>
-                  <th style={{ padding:"12px 14px", textAlign:"left", fontSize:11, fontWeight:700, color:"#93c5fd", letterSpacing:"0.05em", width:140 }}>СМЕНА</th>
+                  <th style={{ padding:"12px 16px", textAlign:"left", fontSize:11, fontWeight:700, color:"#93c5fd", letterSpacing:"0.05em", minWidth:140, position:"sticky", left:0, background:"#1e3a8a", zIndex:2 }}>СОТРУДНИК</th>
                   {days.map(d => (
                     <th key={d.key} style={{ padding:"12px 8px", textAlign:"center", fontSize:11, fontWeight:700, color:d.isToday?"#fbbf24":d.isWeekend?"#64748b":"#bfdbfe" }}>
                       <div>{d.label}</div>
@@ -438,47 +438,44 @@ export default function App() {
                 </tr>
               </thead>
               <tbody>
-                {SHIFTS.map((shift,si) => (
-                  <tr key={shift.id} style={{ borderBottom:"1px solid #f1f5f9", background:si%2===0?"white":"#fafbff" }}>
-                    <td style={{ padding:"12px 14px", borderRight:"1px solid #f1f5f9" }}>
-                      <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-                        <div style={{ width:32, height:32, background:shift.bg, border:`1px solid ${shift.border}`, borderRadius:8, display:"flex", alignItems:"center", justifyContent:"center", fontSize:15 }}>{shift.emoji}</div>
-                        <div>
-                          <div style={{ fontWeight:700, fontSize:12, color:shift.textDark }}>{shift.label}</div>
-                          <div style={{ fontSize:10, color:"#94a3b8", marginTop:1 }}>Смена {shift.id}</div>
-                        </div>
-                      </div>
-                    </td>
-                    {days.map(d => {
-                      const people = sched[d.key][shift.id] || [];
-                      const isUnc  = (warnings[d.key]||[]).includes(shift.id);
-                      const isFull = people.length >= MAX_PER_SHIFT;
-                      // find members NOT in this shift for this day (for admin to assign)
-                      return (
-                        <td key={d.key} style={{ padding:"8px 6px", textAlign:"center", verticalAlign:"middle", borderRight:"1px solid #f1f5f9", background:isUnc?"#fff7ed":d.isToday?"#eff6ff":"transparent", position:"relative" }}>
-                          <div style={{ display:"flex", flexDirection:"column", gap:3 }}>
-                            {people.length===0 && (
-                              <span style={{ color:isUnc?"#f97316":"#e2e8f0", fontSize:isUnc?16:20, fontWeight:700 }}>{isUnc?"✗":"·"}</span>
-                            )}
-                            {people.map(p => (
-                              <div key={p}
-                                onClick={()=> user?.isAdmin && setEditModal({ memberName:p, weekKey, dayKey:d.key, dayLabel:`${d.label} ${d.date}`, currentShift:shift.id })}
-                                style={{ background:shift.bg, border:`1px solid ${shift.border}`, borderRadius:6, padding:"2px 7px", fontSize:10, fontWeight:700, color:nameColor(p), whiteSpace:"nowrap", cursor:user?.isAdmin?"pointer":"default", display:"flex", alignItems:"center", gap:3 }}>
-                                {p.split(" ")[0]}
-                                {user?.isAdmin && <span style={{ fontSize:9, opacity:0.5 }}>✏️</span>}
+                {TEAM.map((member, mi) => {
+                  const hasSubmitted = !!(requests[member.name] && Object.values((requests[member.name][weekKey])||{}).some(v=>v));
+                  return (
+                    <tr key={member.name} style={{ borderBottom:"1px solid #f1f5f9", background:mi%2===0?"white":"#fafbff" }}>
+                      <td style={{ padding:"10px 16px", borderRight:"1px solid #f1f5f9", position:"sticky", left:0, background:mi%2===0?"white":"#fafbff", zIndex:1 }}>
+                        <div style={{ fontWeight:700, fontSize:13, color:nameColor(member.name), whiteSpace:"nowrap" }}>{member.name}</div>
+                        {!hasSubmitted && <div style={{ fontSize:10, color:"#f97316", fontWeight:600, marginTop:1 }}>⏳ не подал</div>}
+                      </td>
+                      {days.map(d => {
+                        const memberShift = ((requests[member.name]||{})[weekKey]||{})[d.key];
+                        const sh = SHIFTS.find(s => s.id === memberShift);
+                        return (
+                          <td key={d.key} style={{ padding:"8px 6px", textAlign:"center", verticalAlign:"middle", borderRight:"1px solid #f1f5f9", background:d.isToday?"#eff6ff":"transparent" }}>
+                            {sh ? (
+                              <div
+                                onClick={()=> user?.isAdmin && setEditModal({ memberName:member.name, weekKey, dayKey:d.key, dayLabel:`${d.label} ${d.date}`, currentShift:sh.id })}
+                                style={{ display:"inline-flex", alignItems:"center", gap:4, background:sh.bg, border:`1px solid ${sh.border}`, borderRadius:8, padding:"4px 8px", cursor:user?.isAdmin?"pointer":"default", whiteSpace:"nowrap" }}>
+                                <span style={{ fontSize:13 }}>{sh.emoji}</span>
+                                <span style={{ fontSize:11, fontWeight:700, color:sh.textDark }}>{sh.short}</span>
+                                {user?.isAdmin && <span style={{ fontSize:9, opacity:0.4 }}>✏️</span>}
                               </div>
-                            ))}
-                            {isFull && <div style={{ fontSize:9, color:"#16a34a", fontWeight:700 }}>✓ закрыто</div>}
-                            {user?.isAdmin && isUnc && (
-                              <button onClick={()=>setEditModal({ memberName:null, weekKey, dayKey:d.key, dayLabel:`${d.label} ${d.date}`, currentShift:shift.id, assignShift:shift.id })}
-                                style={{ background:"#fff7ed", border:"1px dashed #fb923c", borderRadius:6, padding:"2px 6px", fontSize:9, fontWeight:700, color:"#c2410c", cursor:"pointer" }}>+ назначить</button>
+                            ) : hasSubmitted ? (
+                              <span style={{ fontSize:12, color:"#94a3b8", fontWeight:600 }}>вых.</span>
+                            ) : (
+                              <span style={{ fontSize:16, color:"#e2e8f0" }}>—</span>
                             )}
-                          </div>
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))}
+                            {user?.isAdmin && !memberShift && (
+                              <div style={{ marginTop:3 }}>
+                                <button onClick={()=>setEditModal({ memberName:member.name, weekKey, dayKey:d.key, dayLabel:`${d.label} ${d.date}`, currentShift:null })}
+                                  style={{ background:"#f1f5f9", border:"1px dashed #cbd5e1", borderRadius:6, padding:"2px 6px", fontSize:9, fontWeight:700, color:"#64748b", cursor:"pointer" }}>+ смену</button>
+                              </div>
+                            )}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
