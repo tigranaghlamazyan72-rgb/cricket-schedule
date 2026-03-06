@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { initializeApp } from "firebase/app";
-import { getFirestore, doc, setDoc, deleteDoc, onSnapshot, collection } from "firebase/firestore";
+import { getFirestore, doc, setDoc, deleteDoc, updateDoc, onSnapshot, collection } from "firebase/firestore";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAFZpIrw7_d-sIZzNJRcvuomHOGFZmTfGg",
@@ -99,6 +99,8 @@ export default function App() {
   const [editModal, setEditModal] = useState(null);
   const [announcements, setAnnouncements] = useState([]);
   const [newAnnMsg, setNewAnnMsg] = useState("");
+  const [swapRequests, setSwapRequests] = useState([]);
+  const [swapModal, setSwapModal] = useState(null); // { dayKey, dayLabel, fromShift, weekKey }
   const pwdRef = useRef();
 
   useEffect(() => {
@@ -106,6 +108,15 @@ export default function App() {
       const docs = [];
       snapshot.forEach(d => docs.push({ id: d.id, ...d.data() }));
       setAnnouncements(docs.sort((a, b) => b.createdAt - a.createdAt));
+    });
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "shift_swaps"), (snapshot) => {
+      const swaps = [];
+      snapshot.forEach(d => swaps.push({ id: d.id, ...d.data() }));
+      setSwapRequests(swaps.sort((a,b) => b.createdAt - a.createdAt));
     });
     return () => unsub();
   }, []);
@@ -125,6 +136,48 @@ export default function App() {
 
   async function deleteAnnouncement(annId) {
     await deleteDoc(doc(db, "announcements", annId));
+  }
+
+  async function initiateSwap(weekKey, dayKey, fromShift, targetUser, toShift, message) {
+    try {
+      const id = Date.now().toString();
+      await setDoc(doc(db, "shift_swaps", id), {
+        requester: user.name,
+        weekKey,
+        dayKey,
+        fromShift,
+        toShift: toShift || null,
+        targetUser: targetUser || null,
+        status: "pending",
+        createdAt: Date.now(),
+        message: message || ""
+      });
+    } catch(e) { alert("Ошибка отправки запроса"); }
+  }
+
+  async function handleSwapAction(swapId, action) {
+    const swapRef = doc(db, "shift_swaps", swapId);
+    const swap = swapRequests.find(s => s.id === swapId);
+    if (!swap) return;
+
+    if (action === "accept" || action === "approve") {
+      const weekDataReq = { ...((requests[swap.requester]||{})[swap.weekKey] || {}) };
+      weekDataReq[swap.dayKey] = swap.toShift;
+      await setDoc(doc(db, "schedules", swap.requester), { ...(requests[swap.requester]||{}), [swap.weekKey]: weekDataReq });
+
+      if (swap.targetUser) {
+        const weekDataTgt = { ...((requests[swap.targetUser]||{})[swap.weekKey] || {}) };
+        weekDataTgt[swap.dayKey] = swap.fromShift;
+        await setDoc(doc(db, "schedules", swap.targetUser), { ...(requests[swap.targetUser]||{}), [swap.weekKey]: weekDataTgt });
+      }
+      await updateDoc(swapRef, { status: action === "approve" ? "manager_approved" : "accepted" });
+    } else {
+      await updateDoc(swapRef, { status: "rejected" });
+    }
+  }
+
+  async function cancelSwap(swapId) {
+    await deleteDoc(doc(db, "shift_swaps", swapId));
   }
 
   async function managerEditShift(memberName, weekKey, dayKey, newShiftId) {
@@ -275,9 +328,15 @@ export default function App() {
                 </div>
                 {d.isToday && <span style={{ background:"#dbeafe", color:"#1d4ed8", borderRadius:6, padding:"2px 7px", fontSize:10, fontWeight:700 }}>СЕГОДНЯ</span>}
                 {picked && pickedShift && (
-                  <span style={{ background:pickedShift.bg, border:`1px solid ${pickedShift.border}`, color:pickedShift.textDark, borderRadius:7, padding:"3px 10px", fontSize:11, fontWeight:700 }}>
-                    {pickedShift.emoji} {pickedShift.label}
-                  </span>
+                  <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                    <span style={{ background:pickedShift.bg, border:`1px solid ${pickedShift.border}`, color:pickedShift.textDark, borderRadius:7, padding:"3px 10px", fontSize:11, fontWeight:700 }}>
+                      {pickedShift.emoji} {pickedShift.label}
+                    </span>
+                    <button onClick={()=>setSwapModal({ dayKey:d.key, dayLabel:`${d.label} ${d.date}`, fromShift:picked, weekKey })}
+                      style={{ padding:"3px 8px", background:"#fef9c3", border:"1px solid #fde047", borderRadius:7, fontSize:10, fontWeight:700, color:"#854d0e", cursor:"pointer" }}>
+                      🔄 обмен
+                    </button>
+                  </div>
                 )}
                 <div style={{ display:"flex", gap:5, flex:1, flexWrap:"wrap", justifyContent:"flex-end" }}>
                   {SHIFTS.map(shift => {
@@ -419,6 +478,159 @@ export default function App() {
   }
 
   // ── EDIT MODAL ───────────────────────────────────────────
+  function SwapModal() {
+    const [targetUser, setTargetUser] = useState("");
+    const [toShift, setToShift] = useState("");
+    const [message, setMessage] = useState("");
+    const [sending, setSending] = useState(false);
+    if (!swapModal) return null;
+    const { dayKey, dayLabel, fromShift, weekKey } = swapModal;
+    const sh = SHIFTS.find(s=>s.id===fromShift);
+    const teammates = TEAM.filter(m => m.name !== user?.name);
+
+    async function submit() {
+      if (!targetUser && !toShift) { alert("Выбери получателя или желаемую смену"); return; }
+      setSending(true);
+      await initiateSwap(weekKey, dayKey, fromShift, targetUser||null, toShift||null, message);
+      setSending(false);
+      setSwapModal(null);
+    }
+
+    return (
+      <div style={{ position:"fixed", inset:0, background:"rgba(15,23,42,0.55)", zIndex:200, display:"flex", alignItems:"center", justifyContent:"center", padding:20 }} onClick={()=>setSwapModal(null)}>
+        <div style={{ background:"white", borderRadius:18, padding:28, maxWidth:400, width:"100%", boxShadow:"0 24px 64px rgba(0,0,0,0.2)" }} onClick={e=>e.stopPropagation()}>
+          <div style={{ fontWeight:800, fontSize:17, color:"#1e3a8a", marginBottom:4 }}>🔄 Предложить обмен</div>
+          <div style={{ fontSize:12, color:"#64748b", marginBottom:18 }}>{dayLabel}</div>
+
+          <div style={{ background:sh?.bg, border:`1px solid ${sh?.border}`, borderRadius:10, padding:"10px 14px", marginBottom:18, display:"flex", alignItems:"center", gap:8 }}>
+            <span style={{ fontSize:16 }}>{sh?.emoji}</span>
+            <div>
+              <div style={{ fontSize:11, color:"#94a3b8", marginBottom:1 }}>Твоя смена</div>
+              <div style={{ fontWeight:700, color:sh?.textDark, fontSize:13 }}>{sh?.label}</div>
+            </div>
+          </div>
+
+          <div style={{ marginBottom:14 }}>
+            <label style={{ fontSize:11, fontWeight:700, color:"#374151", letterSpacing:"0.04em", display:"block", marginBottom:6 }}>ПРЕДЛОЖИТЬ КОМУ</label>
+            <select value={targetUser} onChange={e=>setTargetUser(e.target.value)}
+              style={{ width:"100%", padding:"10px 12px", background:"#f8fafc", border:"2px solid #e2e8f0", borderRadius:10, fontSize:13, color:"#1e293b", fontFamily:"inherit" }}>
+              <option value="">— Всей команде (открытый запрос) —</option>
+              {teammates.map(m=><option key={m.name} value={m.name}>{m.name}</option>)}
+            </select>
+          </div>
+
+          <div style={{ marginBottom:14 }}>
+            <label style={{ fontSize:11, fontWeight:700, color:"#374151", letterSpacing:"0.04em", display:"block", marginBottom:6 }}>ХОЧУ НА СМЕНУ</label>
+            <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+              <button onClick={()=>setToShift("")} style={{ padding:"7px 12px", borderRadius:8, background:!toShift?"#eff6ff":"#f8fafc", border:`2px solid ${!toShift?"#1e40af":"#e2e8f0"}`, color:!toShift?"#1e3a8a":"#64748b", fontSize:11, fontWeight:700, cursor:"pointer" }}>Любую</button>
+              {SHIFTS.filter(s=>s.id!==fromShift).map(s=>(
+                <button key={s.id} onClick={()=>setToShift(s.id)} style={{ padding:"7px 12px", borderRadius:8, background:toShift===s.id?s.bg:"#f8fafc", border:`2px solid ${toShift===s.id?s.accent:"#e2e8f0"}`, color:toShift===s.id?s.textDark:"#64748b", fontSize:11, fontWeight:700, cursor:"pointer" }}>
+                  {s.emoji} {s.short}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ marginBottom:20 }}>
+            <label style={{ fontSize:11, fontWeight:700, color:"#374151", letterSpacing:"0.04em", display:"block", marginBottom:6 }}>СООБЩЕНИЕ (необязательно)</label>
+            <input value={message} onChange={e=>setMessage(e.target.value)} placeholder="Причина обмена..."
+              style={{ width:"100%", padding:"10px 12px", background:"#f8fafc", border:"2px solid #e2e8f0", borderRadius:10, fontSize:13, fontFamily:"inherit", outline:"none" }} />
+          </div>
+
+          <div style={{ display:"flex", gap:8 }}>
+            <button onClick={()=>setSwapModal(null)} style={{ flex:1, padding:"11px", borderRadius:10, background:"#f1f5f9", border:"none", color:"#64748b", fontSize:13, fontWeight:600, cursor:"pointer" }}>Отмена</button>
+            <button onClick={submit} disabled={sending} style={{ flex:2, padding:"11px", borderRadius:10, background:sending?"#93c5fd":"linear-gradient(135deg,#1d4ed8,#1e3a8a)", border:"none", color:"white", fontSize:13, fontWeight:700, cursor:"pointer", boxShadow:"0 3px 10px rgba(29,78,216,0.3)" }}>
+              {sending ? "Отправляем..." : "📤 Отправить запрос"}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function SwapRequestsBlock() {
+    const mySwaps   = swapRequests.filter(s => s.requester === user?.name);
+    const forMe     = swapRequests.filter(s => s.targetUser === user?.name && s.status === "pending");
+    const openSwaps = swapRequests.filter(s => !s.targetUser && s.status === "pending" && s.requester !== user?.name);
+    const adminView = user?.isAdmin;
+    const pending   = swapRequests.filter(s => s.status === "pending");
+
+    if (!user) return null;
+
+    const shLabel = (id) => { const s=SHIFTS.find(x=>x.id===id); return s?`${s.emoji} ${s.short}`:"?"; };
+    const dayFmt  = (k) => { const d=curDays.find(x=>x.key===k)||nextDays.find(x=>x.key===k); return d?`${d.label} ${d.date}`:k; };
+
+    const StatusBadge = ({status}) => {
+      const map = { pending:{bg:"#fef9c3",color:"#854d0e",txt:"⏳ Ожидает"}, accepted:{bg:"#f0fdf4",color:"#166534",txt:"✅ Принят"}, rejected:{bg:"#fef2f2",color:"#991b1b",txt:"❌ Отклонён"}, manager_approved:{bg:"#eff6ff",color:"#1e3a8a",txt:"👑 Одобрен"} };
+      const s = map[status]||{bg:"#f1f5f9",color:"#64748b",txt:status};
+      return <span style={{ background:s.bg, color:s.color, borderRadius:6, padding:"2px 8px", fontSize:10, fontWeight:700 }}>{s.txt}</span>;
+    };
+
+    const SwapCard = ({swap, showActions}) => (
+      <div style={{ padding:14, borderRadius:12, background:"#fefce8", border:"1px solid #fde047", marginBottom:8 }}>
+        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:6, flexWrap:"wrap", gap:6 }}>
+          <div style={{ fontWeight:700, fontSize:13, color:"#1e293b" }}>
+            {swap.requester.split(" ")[0]} → {shLabel(swap.fromShift)} {swap.toShift ? `→ ${shLabel(swap.toShift)}` : "→ любую"} · {dayFmt(swap.dayKey)}
+          </div>
+          <StatusBadge status={swap.status} />
+        </div>
+        {swap.targetUser && <div style={{ fontSize:11, color:"#64748b", marginBottom:4 }}>Предложено: {swap.targetUser.split(" ")[0]}</div>}
+        {swap.message && <div style={{ fontSize:12, color:"#78716c", fontStyle:"italic", marginBottom:8 }}>"{swap.message}"</div>}
+        {showActions && swap.status === "pending" && (
+          <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginTop:8 }}>
+            {(user?.name === swap.targetUser || (!swap.targetUser && !user?.isAdmin)) && (
+              <button onClick={()=>handleSwapAction(swap.id,"accept")} style={{ padding:"7px 14px", background:"#16a34a", color:"white", borderRadius:8, fontSize:12, fontWeight:700, border:"none", cursor:"pointer" }}>✓ Принять</button>
+            )}
+            {user?.isAdmin && (
+              <button onClick={()=>handleSwapAction(swap.id,"approve")} style={{ padding:"7px 14px", background:"#1d4ed8", color:"white", borderRadius:8, fontSize:12, fontWeight:700, border:"none", cursor:"pointer" }}>👑 Одобрить</button>
+            )}
+            {(user?.name === swap.requester || user?.isAdmin) && (
+              <button onClick={()=>cancelSwap(swap.id)} style={{ padding:"7px 14px", background:"#f1f5f9", color:"#64748b", borderRadius:8, fontSize:12, fontWeight:700, border:"none", cursor:"pointer" }}>✕ Отменить</button>
+            )}
+            {(user?.name === swap.targetUser) && (
+              <button onClick={()=>handleSwapAction(swap.id,"reject")} style={{ padding:"7px 14px", background:"#fef2f2", color:"#dc2626", borderRadius:8, fontSize:12, fontWeight:700, border:"1px solid #fecaca", cursor:"pointer" }}>✗ Отклонить</button>
+            )}
+          </div>
+        )}
+      </div>
+    );
+
+    const sections = adminView
+      ? [{ title:"Все запросы", items: pending, show: true }]
+      : [
+          { title:"Мои запросы", items: mySwaps.filter(s=>s.status==="pending"), show: mySwaps.filter(s=>s.status==="pending").length > 0 },
+          { title:"Запросы ко мне", items: forMe, show: forMe.length > 0 },
+          { title:"Открытые запросы", items: openSwaps, show: openSwaps.length > 0 },
+        ];
+
+    const hasAnything = sections.some(s=>s.show) || (!adminView && mySwaps.filter(s=>s.status!=="pending").length > 0);
+
+    return (
+      <div style={{ marginBottom:28, background:"white", borderRadius:16, padding:20, boxShadow:"0 1px 4px rgba(0,0,0,0.06),0 4px 16px rgba(29,78,216,0.06)" }}>
+        <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:16 }}>
+          <span style={{ fontSize:20 }}>🔄</span>
+          <h3 style={{ fontWeight:800, color:"#1e3a8a", fontSize:16 }}>Обмен сменами</h3>
+          {pending.length > 0 && <span style={{ background:"#fef9c3", color:"#854d0e", borderRadius:20, padding:"2px 10px", fontSize:11, fontWeight:700 }}>{pending.length} активных</span>}
+        </div>
+        {!hasAnything && <div style={{ color:"#94a3b8", fontSize:13, textAlign:"center", padding:"8px 0" }}>Нет активных запросов на обмен</div>}
+        {sections.map(sec => sec.show && (
+          <div key={sec.title} style={{ marginBottom:12 }}>
+            <div style={{ fontSize:11, fontWeight:700, color:"#94a3b8", textTransform:"uppercase", letterSpacing:"0.05em", marginBottom:8 }}>{sec.title}</div>
+            {sec.items.map(swap => <SwapCard key={swap.id} swap={swap} showActions={true} />)}
+          </div>
+        ))}
+        {!adminView && mySwaps.filter(s=>s.status!=="pending").length > 0 && (
+          <details style={{ marginTop:8 }}>
+            <summary style={{ fontSize:12, color:"#94a3b8", cursor:"pointer", fontWeight:600 }}>История запросов ({mySwaps.filter(s=>s.status!=="pending").length})</summary>
+            <div style={{ marginTop:8 }}>
+              {mySwaps.filter(s=>s.status!=="pending").map(swap => <SwapCard key={swap.id} swap={swap} showActions={false} />)}
+            </div>
+          </details>
+        )}
+      </div>
+    );
+  }
+
   function AnnouncementsBlock() {
     return (
       <div style={{ marginBottom:28, background:"white", borderRadius:16, padding:20, boxShadow:"0 1px 4px rgba(0,0,0,0.06),0 4px 16px rgba(29,78,216,0.06)" }}>
@@ -537,6 +749,7 @@ export default function App() {
   return (
     <div style={{ minHeight:"100vh", background:"#f0f4ff", fontFamily:"'Inter','Segoe UI',sans-serif", color:"#1e293b" }}>
       <EditModal />
+      <SwapModal />
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
         *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -572,6 +785,7 @@ export default function App() {
       <main style={{ maxWidth:920, margin:"0 auto", padding:"32px 20px 60px" }}>
 
         {user && <AnnouncementsBlock />}
+        {user && <SwapRequestsBlock />}
 
         {/* LOGIN */}
         {page==="login" && (
